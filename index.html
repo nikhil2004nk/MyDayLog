@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>mydaylog</title>
+    <script>
+      (function(){
+        try {
+          var raw = localStorage.getItem('mydaylog_profile');
+          var html = document.documentElement;
+          // Always remove any stray 'dark' class possibly added by extensions
+          html.classList.remove('dark');
+          if (raw) {
+            var p = JSON.parse(raw);
+            if (p && p.theme === 'dark') {
+              console.log('[theme:init] saved=dark -> add theme-dark class');
+              html.classList.add('theme-dark');
+            } else {
+              console.log('[theme:init] saved=light/none -> ensure no theme-dark');
+              html.classList.remove('theme-dark');
+            }
+          } else {
+            console.log('[theme:init] no profile found');
+          }
+        } catch(e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
