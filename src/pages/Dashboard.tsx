@@ -36,6 +36,8 @@ export default function Dashboard() {
   const [bulkTiffinMode, setBulkTiffinMode] = useState(false);
   const [bulkMeal, setBulkMeal] = useState<'lunch' | 'dinner' | null>(null);
   const [bulkSelectedDates, setBulkSelectedDates] = useState<Date[]>([]);
+  const [bulkAnchorDate, setBulkAnchorDate] = useState<Date | null>(null);
+  const [bulkDraft, setBulkDraft] = useState<{ lunch: Record<string, 'received'|'skipped'|'clear'>; dinner: Record<string, 'received'|'skipped'|'clear'> }>({ lunch: {}, dinner: {} });
 
   useEffect(() => {
     // restore view month if present
@@ -208,37 +210,42 @@ export default function Dashboard() {
     });
   };
 
-  const toggleBulkDate = (d: Date) => {
-    const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const dMid = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    if (dMid.getTime() > todayMid.getTime()) {
-      setToastMsg('Cannot select future dates');
-      return;
-    }
-    setBulkSelectedDates(prev => {
-      const key = dateKey(d);
-      const has = prev.some(x => dateKey(x) === key);
-      return has ? prev.filter(x => dateKey(x) !== key) : [...prev, d];
-    });
-  };
+  
 
   const applyBulkTiffin = (meal: 'lunch' | 'dinner', status: 'received' | 'skipped' | 'clear') => {
     if (bulkSelectedDates.length === 0) return;
-    setTiffinMap(prev => {
-      const next: Record<string, TiffinDay> = { ...prev };
+    setBulkDraft(prev => {
+      const copy = { lunch: { ...prev.lunch }, dinner: { ...prev.dinner } } as { lunch: Record<string, 'received'|'skipped'|'clear'>; dinner: Record<string, 'received'|'skipped'|'clear'> };
       bulkSelectedDates.forEach(d => {
         const k = dateKey(d);
-        const day = { ...(next[k] || {}) } as TiffinDay;
-        if (status === 'clear') {
-          delete (day as any)[meal];
-        } else {
-          day[meal] = { ...(day[meal] || {}), status };
-        }
-        if (!day.lunch && !day.dinner) delete next[k]; else next[k] = day;
+        copy[meal][k] = status;
       });
+      return copy;
+    });
+  };
+
+  const commitBulkDraft = () => {
+    const hasDraft = Object.keys(bulkDraft.lunch).length > 0 || Object.keys(bulkDraft.dinner).length > 0;
+    if (!hasDraft) return;
+    setTiffinMap(prev => {
+      const next: Record<string, TiffinDay> = { ...prev };
+      const applyMeal = (meal: 'lunch'|'dinner', map: Record<string, 'received'|'skipped'|'clear'>) => {
+        Object.entries(map).forEach(([k, st]) => {
+          const day = { ...(next[k] || {}) } as TiffinDay;
+          if (st === 'clear') {
+            delete (day as any)[meal];
+          } else {
+            day[meal] = { ...(day[meal] || {}), status: st } as any;
+          }
+          if (!day.lunch && !day.dinner) delete next[k]; else next[k] = day;
+        });
+      };
+      applyMeal('lunch', bulkDraft.lunch);
+      applyMeal('dinner', bulkDraft.dinner);
       return next;
     });
     setToastMsg('Meal statuses updated ');
+    setBulkDraft({ lunch: {}, dinner: {} });
   };
 
   return (
@@ -344,7 +351,7 @@ export default function Dashboard() {
           {!bulkTiffinMode ? (
             <button
               className="px-4 py-1.5 rounded-full border dark:border-gray-700 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 shadow-sm"
-              onClick={() => { setBulkTiffinMode(true); setBulkSelectedDates([]); setBulkMeal(null); }}
+              onClick={() => { setBulkTiffinMode(true); setBulkSelectedDates([]); setBulkMeal(null); setBulkAnchorDate(null); setBulkDraft({ lunch: {}, dinner: {} }); }}
             > Bulk set Meals</button>
           ) : (
             <div className="flex flex-col gap-3 md:gap-2">
@@ -401,13 +408,13 @@ export default function Dashboard() {
                   {bulkSelectedDates.length>0 && (
                     <button
                       className="px-3 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm"
-                      onClick={() => setBulkSelectedDates([])}
+                      onClick={() => { setBulkSelectedDates([]); setBulkAnchorDate(null); }}
                     >Clear selection</button>
                   )}
                 </div>
                 <button
                   className="px-4 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm"
-                  onClick={() => { setBulkTiffinMode(false); setBulkSelectedDates([]); }}
+                  onClick={() => { commitBulkDraft(); setBulkTiffinMode(false); setBulkSelectedDates([]); setBulkAnchorDate(null); setBulkDraft({ lunch: {}, dinner: {} }); }}
                 >Done</button>
               </div>
             </div>
@@ -417,12 +424,79 @@ export default function Dashboard() {
           <Calendar
             year={year}
             month={month}
-            tiffinByDate={Object.fromEntries(Object.entries(tiffinMap).map(([k, v]) => [k, { lunch: v.lunch?.status, dinner: v.dinner?.status }]))}
-            onSelect={(d) => {
+            tiffinByDate={(() => {
+              const base = Object.fromEntries(Object.entries(tiffinMap).map(([k, v]) => [k, { lunch: v.lunch?.status, dinner: v.dinner?.status }]));
+              if (bulkTiffinMode) {
+                const applyDraft = (meal: 'lunch'|'dinner', map: Record<string, 'received'|'skipped'|'clear'>) => {
+                  Object.entries(map).forEach(([k, st]) => {
+                    const cur = base[k] || {} as any;
+                    if (st === 'clear') {
+                      cur[meal] = undefined;
+                    } else {
+                      cur[meal] = st as any;
+                    }
+                    base[k] = cur;
+                  });
+                };
+                applyDraft('lunch', bulkDraft.lunch);
+                applyDraft('dinner', bulkDraft.dinner);
+              }
+              return base as Record<string, { lunch?: 'received'|'skipped'; dinner?: 'received'|'skipped' }>;
+            })()}
+            onSelect={(d, modifiers) => {
               const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
               const dMid = new Date(d.getFullYear(), d.getMonth(), d.getDate());
               if (dMid.getTime() > todayMid.getTime()) { setToastMsg('Cannot edit future dates'); return; }
-              if (bulkTiffinMode) toggleBulkDate(d); else openDaily(d);
+              if (!bulkTiffinMode) { openDaily(d); return; }
+
+              const ctrlLike = !!modifiers?.ctrlKey || !!modifiers?.metaKey;
+              const shift = !!modifiers?.shiftKey;
+
+              const keyOf = (x: Date) => dateKey(x);
+
+              const clampToToday = (x: Date) => {
+                const xm = new Date(x.getFullYear(), x.getMonth(), x.getDate());
+                return xm.getTime() <= todayMid.getTime();
+              };
+
+              const rangeBetween = (a: Date, b: Date) => {
+                const start = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+                const end = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+                const dir = start.getTime() <= end.getTime() ? 1 : -1;
+                const first = dir === 1 ? start : end;
+                const last = dir === 1 ? end : start;
+                const out: Date[] = [];
+                let cur = new Date(first);
+                while (cur.getTime() <= last.getTime()) {
+                  if (clampToToday(cur)) out.push(new Date(cur));
+                  cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1);
+                }
+                return out;
+              };
+
+              if (shift && bulkAnchorDate) {
+                // Select continuous range from anchor to current
+                const rng = rangeBetween(bulkAnchorDate, d);
+                setBulkSelectedDates(rng);
+                // Keep anchor as the original unless ctrl is also pressed, then move anchor
+                if (ctrlLike) setBulkAnchorDate(d);
+                return;
+              }
+
+              if (ctrlLike) {
+                // Toggle single date
+                setBulkSelectedDates(prev => {
+                  const k = keyOf(d);
+                  const has = prev.some(x => keyOf(x) === k);
+                  return has ? prev.filter(x => keyOf(x) !== k) : [...prev, d];
+                });
+                setBulkAnchorDate(d);
+                return;
+              }
+
+              // Plain click: set single selection and anchor
+              setBulkSelectedDates([d]);
+              setBulkAnchorDate(d);
             }}
             selected={bulkTiffinMode ? null : selectedDate}
             selectedDates={bulkTiffinMode ? bulkSelectedDates : undefined}

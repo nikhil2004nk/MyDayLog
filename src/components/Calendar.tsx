@@ -4,7 +4,7 @@ export type CalendarProps = {
   year: number;
   month: number; // 0-11
   tiffinByDate?: Record<string, { lunch?: 'received' | 'skipped'; dinner?: 'received' | 'skipped' }>;
-  onSelect: (date: Date) => void;
+  onSelect: (date: Date, modifiers?: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => void;
   onPrevMonth?: () => void;
   onNextMonth?: () => void;
   onToday?: () => void;
@@ -112,7 +112,7 @@ export default function Calendar({ year, month, tiffinByDate, onSelect, onPrevMo
               return (
                 <button
                   key={j}
-                  onClick={() => { if (isFuture) return; onSelect(d); }}
+                  onClick={(e) => { if (isFuture) return; onSelect(d, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }); }}
                   className={btnClass}
                 >
                   
