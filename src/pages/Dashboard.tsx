@@ -1,22 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTheme } from '../theme/ThemeProvider';
 import { useAuth } from '../auth/AuthContext';
-import Calendar, { dateKey, type DayStatus } from '../components/Calendar';
+import Calendar, { dateKey } from '../components/Calendar';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
-import DailyTasks from '../components/DailyTasks';
 import FadeIn from '../components/FadeIn';
 
-type Task = {
-  id: string;
-  title: string;
-  done: boolean;
-  notes?: string;
-};
-
-type Store = Record<string, Task[]>;
-
-const STORAGE_KEY = 'mydaylog_tasks';
 const PROFILE_KEY = 'mydaylog_profile';
 const TIFFIN_KEY = 'mydaylog_tiffin';
 
@@ -30,40 +19,17 @@ type TiffinDay = {
   dinner?: TiffinEntry;
 };
 
-function loadStore(): Store {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveStore(s: Store) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-}
-
-function randomId() {
-  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-}
-
 export default function Dashboard() {
   const { user, logout } = useAuth();
-  const [store, setStore] = useState<Store>({});
   const today = useMemo(() => new Date(), []);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-  const [editingNotes, setEditingNotes] = useState<{ k: string; id: string; draft: string } | null>(null);
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth()); // 0-11
   const [showSettings, setShowSettings] = useState(false);
   const [displayName, setDisplayName] = useState<string>('');
   const { theme, setTheme, toggleTheme } = useTheme();
   const [weekStart, setWeekStart] = useState<'mon' | 'sun'>('mon');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [selectMode, setSelectMode] = useState(false);
   const [tiffinMap, setTiffinMap] = useState<Record<string, TiffinDay>>({});
   const [tiffinReminderEnabled, setTiffinReminderEnabled] = useState(false);
   const [tiffinReminderTime, setTiffinReminderTime] = useState<string>('12:30');
@@ -72,7 +38,6 @@ export default function Dashboard() {
   const [bulkSelectedDates, setBulkSelectedDates] = useState<Date[]>([]);
 
   useEffect(() => {
-    setStore(loadStore());
     // restore view month if present
     try {
       const raw = localStorage.getItem('mydaylog_view_month');
@@ -118,10 +83,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    saveStore(store);
-  }, [store]);
-
-  useEffect(() => {
     localStorage.setItem('mydaylog_view_month', JSON.stringify({ y: viewYear, m: viewMonth }));
   }, [viewYear, viewMonth]);
 
@@ -149,7 +110,7 @@ export default function Dashboard() {
       const dinnerSet = !!entry?.dinner?.status;
       if (!lunchSet || !dinnerSet) {
         if (last !== todayKey) {
-          setToastMsg("Don't forget to set today's meals 🍽️");
+          setToastMsg("Don't forget to set today's meals ");
           localStorage.setItem(REM_KEY, todayKey);
         }
       }
@@ -157,27 +118,8 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [tiffinReminderEnabled, tiffinReminderTime, tiffinMap]);
 
-  useEffect(() => {
-    // Clear selection when date changes
-    setSelectedIds([]);
-    setSelectMode(false);
-  }, [selectedDate]);
-
   const year = viewYear;
   const month = viewMonth;
-  const monthKeyPrefix = `${year}-${String(month + 1).padStart(2, '0')}-`;
-
-  const statusByDate: Record<string, DayStatus> = useMemo(() => {
-    const res: Record<string, DayStatus> = {};
-    Object.entries(store).forEach(([k, tasks]) => {
-      if (!k.startsWith(monthKeyPrefix)) return;
-      if (!tasks.length) return;
-      const done = tasks.filter(t => t.done).length;
-      const status: DayStatus = done === 0 ? 'red' : done === tasks.length ? 'green' : 'yellow';
-      res[k] = status;
-    });
-    return res;
-  }, [store, monthKeyPrefix]);
 
   // Tiffin stats (separate lunch and dinner)
   const monthTiffin = useMemo(() => {
@@ -238,135 +180,8 @@ export default function Dashboard() {
     return streak;
   }, [tiffinMap]);
 
-  const countsByDate: Record<string, number> = useMemo(() => {
-    const res: Record<string, number> = {};
-    Object.entries(store).forEach(([k, tasks]) => {
-      if (!k.startsWith(monthKeyPrefix)) return;
-      res[k] = tasks.length;
-    });
-    return res;
-  }, [store, monthKeyPrefix]);
-
-  const tasksToday = store[dateKey(today)] || [];
-  const tasksDoneToday = tasksToday.filter(t => t.done).length;
-  const daysLoggedThisMonth = useMemo(() => Object.keys(store).filter(k => k.startsWith(monthKeyPrefix) && (store[k]?.length || 0) > 0).length, [store, monthKeyPrefix]);
-  const monthTotals = useMemo(() => {
-    let done = 0; let total = 0; let pending = 0;
-    Object.entries(store).forEach(([k, tasks]) => {
-      if (!k.startsWith(monthKeyPrefix)) return;
-      total += tasks.length;
-      done += tasks.filter(t => t.done).length;
-      pending += tasks.filter(t => !t.done).length;
-    });
-    const pct = total ? Math.round((done / total) * 100) : 0;
-    return { done, total, pct, pending };
-  }, [store, monthKeyPrefix]);
-
   const openDaily = (d: Date) => {
     setSelectedDate(d);
-  };
-
-  const toggleTask = (k: string, id: string) => {
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      const idx = arr.findIndex(t => t.id === id);
-      if (idx >= 0) arr[idx] = { ...arr[idx], done: !arr[idx].done };
-      return { ...prev, [k]: arr };
-    });
-    setToastMsg('Task updated successfully ✅');
-  };
-
-  const toggleSelect = (id: string) => {
-    setSelectedIds(prev => {
-      const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-      setSelectMode(next.length > 0);
-      return next;
-    });
-  };
-
-  const bulkComplete = () => {
-    if (!selectedDate) return;
-    const k = dateKey(selectedDate);
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      const setSel = new Set(selectedIds);
-      const next = arr.map(t => setSel.has(t.id) ? { ...t, done: true } : t);
-      return { ...prev, [k]: next };
-    });
-    setToastMsg('Marked selected as done ✅');
-    setSelectedIds([]);
-  };
-
-  const bulkRemove = () => {
-    if (!selectedDate) return;
-    const k = dateKey(selectedDate);
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      const setSel = new Set(selectedIds);
-      const next = arr.filter(t => !setSel.has(t.id));
-      return { ...prev, [k]: next };
-    });
-    setToastMsg('Removed selected 🗑️');
-    setSelectedIds([]);
-  };
-
-  const addTask = (k: string, title: string) => {
-    const t: Task = { id: randomId(), title, done: false };
-    setStore(prev => ({ ...prev, [k]: [...(prev[k] || []), t] }));
-  };
-
-  const removeTask = (k: string, id: string) => {
-    setStore(prev => ({ ...prev, [k]: (prev[k] || []).filter(t => t.id !== id) }));
-  };
-
-  const openNotes = (k: string, id: string) => {
-    const task = (store[k] || []).find(t => t.id === id);
-    setEditingNotes({ k, id, draft: task?.notes || '' });
-  };
-
-  const saveNotes = () => {
-    if (!editingNotes) return;
-    const { k, id, draft } = editingNotes;
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      const idx = arr.findIndex(t => t.id === id);
-      if (idx >= 0) arr[idx] = { ...arr[idx], notes: draft };
-      return { ...prev, [k]: arr };
-    });
-    setEditingNotes(null);
-    setToastMsg('Task updated successfully ✅');
-  };
-
-  const renameTask = (k: string, id: string, title: string) => {
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      const idx = arr.findIndex(t => t.id === id);
-      if (idx >= 0) arr[idx] = { ...arr[idx], title };
-      return { ...prev, [k]: arr };
-    });
-    setToastMsg('Task updated successfully ✅');
-  };
-
-  const reorderTasks = (k: string, fromIndex: number, toIndex: number) => {
-    setStore(prev => {
-      const arr = prev[k] ? [...prev[k]] : [];
-      if (fromIndex < 0 || fromIndex >= arr.length || toIndex < 0 || toIndex >= arr.length) return prev;
-      const [moved] = arr.splice(fromIndex, 1);
-      arr.splice(toIndex, 0, moved);
-      return { ...prev, [k]: arr };
-    });
-    setToastMsg('Order updated ✅');
-  };
-
-  const onQuickAdd = () => {
-    setNewTitle('');
-    setShowAdd(true);
-  };
-
-  const confirmQuickAdd = () => {
-    if (!newTitle.trim()) return;
-    addTask(dateKey(today), newTitle.trim());
-    setShowAdd(false);
   };
 
   const setTiffinFor = (k: string, meal: 'lunch' | 'dinner', status: MealStatus | 'clear') => {
@@ -382,7 +197,7 @@ export default function Dashboard() {
       if (!day.lunch && !day.dinner) delete next[k]; else next[k] = day;
       return next;
     });
-    setToastMsg('Meal status updated ✅');
+    setToastMsg('Meal status updated ');
   };
 
   const setTiffinReason = (k: string, meal: 'lunch' | 'dinner', reason: string) => {
@@ -423,19 +238,14 @@ export default function Dashboard() {
       });
       return next;
     });
-    setToastMsg('Meal statuses updated ✅');
+    setToastMsg('Meal statuses updated ');
   };
-
-
-  const currentGreetingMonth = new Date(year, month, 1).toLocaleString(undefined, { month: 'long' });
-  const fallbackName = user?.guest ? 'there' : (user?.identifier?.split('@')[0] || 'there');
-  const greetingName = displayName || fallbackName;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <div className="sticky top-0 z-10 bg-white dark:bg-gray-800 border-b dark:border-gray-700">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="text-sm text-gray-600 dark:text-gray-300">Hey {greetingName} 👋, here’s your {currentGreetingMonth} progress</div>
+          <div className="text-sm text-gray-600 dark:text-gray-300">Hey {user?.guest ? 'there' : (user?.identifier?.split('@')[0] || 'there')} 👋</div>
           <div className="flex items-center gap-3">
             <button className="text-sm text-gray-600 dark:text-gray-300" onClick={logout}>Logout</button>
             <button
@@ -452,25 +262,6 @@ export default function Dashboard() {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <div className="text-xs text-gray-500 dark:text-gray-400">Tasks Done Today</div>
-            <div className="text-2xl font-semibold">{tasksDoneToday}</div>
-          </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <div className="text-xs text-gray-500 dark:text-gray-400">Days Logged This Month</div>
-            <div className="text-2xl font-semibold">{daysLoggedThisMonth}</div>
-          </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <div className="text-xs text-gray-500 dark:text-gray-400">Overall Completion %</div>
-            <div className="text-2xl font-semibold">{monthTotals.pct}%</div>
-          </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-            <div className="text-xs text-gray-500 dark:text-gray-400">Pending Tasks</div>
-            <div className="text-2xl font-semibold">{monthTotals.pending}</div>
-          </div>
-        </div>
-
         <div className="mb-4 bg-white dark:bg-gray-800 rounded-xl shadow p-4">
           <div className="flex items-center justify-between mb-4">
             <div className="text-base font-semibold">Meals Stats</div>
@@ -479,11 +270,11 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 gap-6 md:[grid-template-columns:1fr_1px_1fr]">
             {/* Column: Lunch */}
             <div>
-              <div className="mb-2 text-base md:text-lg font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2"><span>🍱</span><span>Lunch</span></div>
+              <div className="mb-2 text-base md:text-lg font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2"><span></span><span>Lunch</span></div>
               {/* Week - Lunch */}
               <div className="rounded-xl border dark:border-gray-700 p-3 bg-gradient-to-br from-emerald-50/60 to-white dark:from-gray-800 dark:to-gray-800 mb-3">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1">📅 <span>This Week</span></div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1"> <span>This Week</span></div>
                 </div>
                 <div className="flex items-center gap-2 text-sm flex-wrap">
                   <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">Received {weekTiffin.lunch.received}/7</span>
@@ -498,7 +289,7 @@ export default function Dashboard() {
               {/* Month - Lunch */}
               <div className="rounded-xl border dark:border-gray-700 p-3 bg-gradient-to-br from-emerald-50/60 to-white dark:from-gray-800 dark:to-gray-800">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1">🗓️ <span>This Month</span></div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1"> <span>This Month</span></div>
                 </div>
                 <div className="flex items-center gap-2 text-sm flex-wrap">
                   <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">Received {monthTiffin.lunch.received}/{new Date(year, month + 1, 0).getDate()}</span>
@@ -515,11 +306,11 @@ export default function Dashboard() {
             <div className="hidden md:block bg-gray-200 dark:bg-gray-700 rounded-full w-px" />
             {/* Column: Dinner */}
             <div>
-              <div className="mb-2 text-base md:text-lg font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2"><span>🍽️</span><span>Dinner</span></div>
+              <div className="mb-2 text-base md:text-lg font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2"><span></span><span>Dinner</span></div>
               {/* Week - Dinner */}
               <div className="rounded-xl border dark:border-gray-700 p-3 bg-gradient-to-br from-indigo-50/60 to-white dark:from-gray-800 dark:to-gray-800 mb-3">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1">📅 <span>This Week</span></div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1"> <span>This Week</span></div>
                 </div>
                 <div className="flex items-center gap-2 text-sm flex-wrap">
                   <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">Received {weekTiffin.dinner.received}/7</span>
@@ -534,7 +325,7 @@ export default function Dashboard() {
               {/* Month - Dinner */}
               <div className="rounded-xl border dark:border-gray-700 p-3 bg-gradient-to-br from-indigo-50/60 to-white dark:from-gray-800 dark:to-gray-800">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1">🗓️ <span>This Month</span></div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1"> <span>This Month</span></div>
                 </div>
                 <div className="flex items-center gap-2 text-sm flex-wrap">
                   <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">Received {monthTiffin.dinner.received}/{new Date(year, month + 1, 0).getDate()}</span>
@@ -554,7 +345,7 @@ export default function Dashboard() {
             <button
               className="px-4 py-1.5 rounded-full border dark:border-gray-700 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 shadow-sm"
               onClick={() => { setBulkTiffinMode(true); setBulkSelectedDates([]); setBulkMeal(null); }}
-            >⚙️ Bulk set Meals</button>
+            > Bulk set Meals</button>
           ) : (
             <div className="flex flex-col gap-3 md:gap-2">
               <div className="flex flex-wrap items-center gap-2 justify-between">
@@ -575,12 +366,12 @@ export default function Dashboard() {
                     aria-pressed={bulkMeal==='lunch'}
                     className={`px-3 py-1.5 text-sm rounded-full border shadow-sm transition relative ${bulkMeal==='lunch'?'bg-emerald-50 text-emerald-800 ring-2 ring-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-200 dark:ring-emerald-700':'bg-white dark:bg-gray-800 dark:text-gray-200'} dark:border-gray-700`}
                     onClick={() => setBulkMeal('lunch')}
-                  >🍱 Lunch</button>
+                  > Lunch</button>
                   <button
                     aria-pressed={bulkMeal==='dinner'}
                     className={`px-3 py-1.5 text-sm rounded-full border shadow-sm transition relative ${bulkMeal==='dinner'?'bg-indigo-50 text-indigo-800 ring-2 ring-indigo-300 dark:bg-indigo-900/30 dark:text-indigo-200 dark:ring-indigo-700':'bg-white dark:bg-gray-800 dark:text-gray-200'} dark:border-gray-700`}
                     onClick={() => setBulkMeal('dinner')}
-                  >🍽️ Dinner</button>
+                  > Dinner</button>
                 </div>
                 )}
               </div>
@@ -594,19 +385,19 @@ export default function Dashboard() {
                     title={bulkSelectedDates.length===0 ? 'Select at least one date' : undefined}
                     className={`px-4 py-1.5 rounded-full shadow-sm ${bulkSelectedDates.length===0 || !bulkMeal ? 'opacity-60 cursor-not-allowed bg-emerald-600 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
                     onClick={() => { if (bulkMeal) applyBulkTiffin(bulkMeal, 'received'); }}
-                  >✅ Mark Received</button>
+                  > Mark Received</button>
                   <button
                     disabled={bulkSelectedDates.length===0 || !bulkMeal}
                     title={bulkSelectedDates.length===0 ? 'Select at least one date' : undefined}
                     className={`px-4 py-1.5 rounded-full shadow-sm ${bulkSelectedDates.length===0 || !bulkMeal ? 'opacity-60 cursor-not-allowed bg-rose-600 text-white' : 'bg-rose-600 text-white hover:bg-rose-700'}`}
                     onClick={() => { if (bulkMeal) applyBulkTiffin(bulkMeal, 'skipped'); }}
-                  >🚫 Mark Skipped</button>
+                  > Mark Skipped</button>
                   <button
                     disabled={bulkSelectedDates.length===0 || !bulkMeal}
                     title={bulkSelectedDates.length===0 ? 'Select at least one date' : undefined}
                     className={`px-4 py-1.5 rounded-full border dark:border-gray-700 bg-gray-50 text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 shadow-sm ${bulkSelectedDates.length===0 || !bulkMeal ? 'opacity-60 cursor-not-allowed' : ''}`}
                     onClick={() => { if (bulkMeal) applyBulkTiffin(bulkMeal, 'clear'); }}
-                  >🧹 Clear</button>
+                  > Clear</button>
                   {bulkSelectedDates.length>0 && (
                     <button
                       className="px-3 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm"
@@ -626,8 +417,6 @@ export default function Dashboard() {
           <Calendar
             year={year}
             month={month}
-            statusByDate={statusByDate}
-            countsByDate={countsByDate}
             tiffinByDate={Object.fromEntries(Object.entries(tiffinMap).map(([k, v]) => [k, { lunch: v.lunch?.status, dinner: v.dinner?.status }]))}
             onSelect={(d) => {
               const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -653,57 +442,15 @@ export default function Dashboard() {
               setViewMonth(today.getMonth());
             }}
             today={today}
-            onDropTask={(targetDate, data) => {
-              const toKey = dateKey(targetDate);
-              const fromKey = data.fromKey;
-              const id = data.taskId;
-              if (fromKey === toKey) return;
-              setStore(prev => {
-                const fromArr = prev[fromKey] ? [...prev[fromKey]] : [];
-                const idx = fromArr.findIndex(t => t.id === id);
-                if (idx < 0) return prev;
-                const task = fromArr[idx];
-                fromArr.splice(idx, 1);
-                const toArr = prev[toKey] ? [...prev[toKey]] : [];
-                toArr.push(task);
-                return { ...prev, [fromKey]: fromArr, [toKey]: toArr };
-              });
-              setToastMsg('Task moved ✅');
-            }}
           />
         </div>
       </div>
-
-      <button
-        onClick={onQuickAdd}
-        className="fixed bottom-6 right-6 bg-blue-600 text-white rounded-full w-14 h-14 text-3xl leading-[3.5rem] text-center shadow-lg"
-        aria-label="Add Task"
-      >
-        +
-      </button>
 
       <Modal
         open={!!selectedDate}
         onClose={() => setSelectedDate(null)}
         title={selectedDate ? selectedDate.toDateString() : ''}
-        actions={
-          <div className="w-full flex items-center justify-between gap-3">
-            {selectMode ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">{selectedIds.length} selected</span>
-                <button className="px-3 py-1.5 rounded border" disabled={selectedIds.length===0} onClick={bulkComplete}>Complete</button>
-                <button className="px-3 py-1.5 rounded border text-red-600" disabled={selectedIds.length===0} onClick={bulkRemove}>Remove</button>
-              </div>
-            ) : <div />}
-            <button
-              className="bg-blue-600 text-white px-3 py-1.5 rounded"
-              onClick={() => {
-                setNewTitle('');
-                setShowAdd(true);
-              }}
-            >Add Task</button>
-          </div>
-        }
+        actions={<div />}
       >
         {selectedDate && (
           <FadeIn key={dateKey(selectedDate)}>
@@ -728,9 +475,9 @@ export default function Dashboard() {
                   const status = tiffinMap[k]?.lunch?.status;
                   return (
                     <>
-                      <button className={`px-3 py-1.5 text-sm ${status==='received' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'lunch', 'received')}>✅ Received</button>
-                      <button className={`px-3 py-1.5 text-sm ${status==='skipped' ? 'bg-rose-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'lunch', 'skipped')}>🚫 Skipped</button>
-                      <button className={`px-3 py-1.5 text-sm ${!status ? 'bg-gray-100 dark:bg-gray-700' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'}`} onClick={() => setTiffinFor(k, 'lunch', 'clear')}>🧹 Clear</button>
+                      <button className={`px-3 py-1.5 text-sm ${status==='received' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'lunch', 'received')}> Received</button>
+                      <button className={`px-3 py-1.5 text-sm ${status==='skipped' ? 'bg-rose-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'lunch', 'skipped')}> Skipped</button>
+                      <button className={`px-3 py-1.5 text-sm ${!status ? 'bg-gray-100 dark:bg-gray-700' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'}`} onClick={() => setTiffinFor(k, 'lunch', 'clear')}> Clear</button>
                     </>
                   );
                 })()}
@@ -775,9 +522,9 @@ export default function Dashboard() {
                   const status = tiffinMap[k]?.dinner?.status;
                   return (
                     <>
-                      <button className={`px-3 py-1.5 text-sm ${status==='received' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'dinner', 'received')}>✅ Received</button>
-                      <button className={`px-3 py-1.5 text-sm ${status==='skipped' ? 'bg-rose-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'dinner', 'skipped')}>🚫 Skipped</button>
-                      <button className={`px-3 py-1.5 text-sm ${!status ? 'bg-gray-100 dark:bg-gray-700' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'}`} onClick={() => setTiffinFor(k, 'dinner', 'clear')}>🧹 Clear</button>
+                      <button className={`px-3 py-1.5 text-sm ${status==='received' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'dinner', 'received')}> Received</button>
+                      <button className={`px-3 py-1.5 text-sm ${status==='skipped' ? 'bg-rose-600 text-white' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'} border-r dark:border-gray-700`} onClick={() => setTiffinFor(k, 'dinner', 'skipped')}> Skipped</button>
+                      <button className={`px-3 py-1.5 text-sm ${!status ? 'bg-gray-100 dark:bg-gray-700' : 'bg-white hover:bg-gray-50 dark:bg-gray-800 dark:hover:bg-gray-700'}`} onClick={() => setTiffinFor(k, 'dinner', 'clear')}> Clear</button>
                     </>
                   );
                 })()}
@@ -801,59 +548,8 @@ export default function Dashboard() {
               }
               return null;
             })()}
-            <DailyTasks
-              k={dateKey(selectedDate)}
-              tasks={store[dateKey(selectedDate)] || []}
-              onToggle={toggleTask}
-              onRemove={removeTask}
-              onEditNotes={openNotes}
-              onRename={renameTask}
-              onReorder={reorderTasks}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-              selectMode={selectMode}
-              onSelectAll={(ids: string[], checked: boolean) => {
-                setSelectedIds(checked ? ids : []);
-              }}
-            />
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  className={`px-3 py-1.5 rounded border dark:border-gray-700 ${selectMode ? 'bg-gray-100 dark:bg-gray-700' : 'dark:bg-gray-800'}`}
-                  onClick={() => {
-                    setSelectMode(v => {
-                      const next = !v;
-                      if (!next) setSelectedIds([]);
-                      return next;
-                    });
-                  }}
-                >Multi-select</button>
-                {selectMode && (
-                  <div className="text-sm text-gray-600 dark:text-gray-300">Use sticky bar below for bulk actions</div>
-                )}
-              </div>
-            </div>
           </FadeIn>
         )}
-      </Modal>
-
-      <Modal
-        open={!!editingNotes}
-        onClose={() => setEditingNotes(null)}
-        title="Notes"
-        actions={
-          <div className="flex gap-2">
-            <button className="px-3 py-1.5 rounded border" onClick={() => setEditingNotes(null)}>Cancel</button>
-            <button className="px-3 py-1.5 rounded bg-blue-600 text-white" onClick={saveNotes}>Save</button>
-          </div>
-        }
-      >
-        <textarea
-          className="w-full border rounded p-2 min-h-28 dark:border-gray-700 dark:bg-gray-800"
-          placeholder="Add remarks..."
-          value={editingNotes?.draft || ''}
-          onChange={(e) => setEditingNotes(prev => prev ? { ...prev, draft: e.target.value } : prev)}
-        />
       </Modal>
 
       <Toast open={!!toastMsg} message={toastMsg || ''} onClose={() => setToastMsg(null)} />
@@ -869,7 +565,7 @@ export default function Dashboard() {
               className="px-3 py-1.5 rounded bg-blue-600 text-white"
               onClick={() => {
                 localStorage.setItem(PROFILE_KEY, JSON.stringify({ displayName, theme, weekStart, tiffinReminderEnabled, tiffinReminderTime }));
-                setToastMsg('Settings saved ✅');
+                setToastMsg('Settings saved ');
                 setShowSettings(false);
               }}
             >Save</button>
@@ -909,25 +605,6 @@ export default function Dashboard() {
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Shows an in-app reminder if today’s lunch/dinner status isn’t set at the chosen time.</div>
           </div>
         </div>
-      </Modal>
-
-      <Modal
-        open={showAdd}
-        onClose={() => setShowAdd(false)}
-        title="Add Task"
-        actions={
-          <div className="flex gap-2">
-            <button className="px-3 py-1.5 rounded border" onClick={() => setShowAdd(false)}>Cancel</button>
-            <button className="px-3 py-1.5 rounded bg-blue-600 text-white" onClick={confirmQuickAdd}>Add</button>
-          </div>
-        }
-      >
-        <input
-          className="w-full border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800"
-          placeholder="Assignment submission, Lunch received, Dinner skipped, ..."
-          value={newTitle}
-          onChange={e => setNewTitle(e.target.value)}
-        />
       </Modal>
     </div>
   );
