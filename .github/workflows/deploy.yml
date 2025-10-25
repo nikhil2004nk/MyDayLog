@@ -3,9 +3,6 @@ name: Deploy MyDayLog to GitHub Pages
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'MyDayLog/**'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 permissions:
