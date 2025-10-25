@@ -550,7 +550,7 @@ export default function Dashboard() {
             > Bulk set Meals</button>
           ) : (
             <div className="flex flex-col gap-3 md:gap-2">
-              <div className="flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex flex-col md:flex-row md:flex-wrap items-start md:items-center gap-2 md:justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-sm inline-flex items-center gap-2 text-gray-700 dark:text-gray-200">
                     <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
@@ -562,8 +562,8 @@ export default function Dashboard() {
                   )}
                 </div>
                 {bulkSelectedDates.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm md:text-base text-gray-600 dark:text-gray-300 font-medium">Select : </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm md:text-base text-gray-600 dark:text-gray-300 font-medium whitespace-nowrap">Select : </span>
                   <button
                     aria-pressed={bulkMeal==='lunch'}
                     className={`px-3 py-1.5 text-sm rounded-full border shadow-sm transition relative ${bulkMeal==='lunch'?'bg-emerald-50 text-emerald-800 ring-2 ring-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-200 dark:ring-emerald-700':'bg-white dark:bg-gray-800 dark:text-gray-200'} dark:border-gray-700`}
@@ -577,8 +577,8 @@ export default function Dashboard() {
                 </div>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2 justify-between">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-col md:flex-row md:flex-wrap items-start md:items-center gap-2 md:justify-between">
+                <div className="flex items-center gap-2 flex-wrap">
                   {bulkSelectedDates.length > 0 && bulkMeal && (
                   <span className="text-xs text-gray-500 dark:text-gray-400">Perform Action :</span>
                   )}
@@ -602,13 +602,13 @@ export default function Dashboard() {
                   > Clear</button>
                   {bulkSelectedDates.length>0 && (
                     <button
-                      className="px-3 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm"
+                      className="px-3 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm whitespace-nowrap"
                       onClick={() => { setBulkSelectedDates([]); setBulkAnchorDate(null); }}
                     >Clear selection</button>
                   )}
                 </div>
                 <button
-                  className="px-4 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm"
+                  className="px-4 py-1.5 rounded-full border bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 shadow-sm md:self-auto self-end"
                   onClick={() => { commitBulkDraft(); setBulkTiffinMode(false); setBulkSelectedDates([]); setBulkAnchorDate(null); setBulkDraft({ lunch: {}, dinner: {} }); }}
                 >Done</button>
               </div>
@@ -669,17 +669,17 @@ export default function Dashboard() {
                 return out;
               };
 
-              if (shift && bulkAnchorDate) {
-                // Select continuous range from anchor to current
+              // Range selection with Shift (desktop) or when user has just set an anchor (mobile two-tap)
+              if ((shift && bulkAnchorDate) || (bulkAnchorDate && (bulkSelectedDates.length === 0 || (bulkSelectedDates.length === 1 && keyOf(bulkSelectedDates[0]) === keyOf(bulkAnchorDate))))) {
                 const rng = rangeBetween(bulkAnchorDate, d);
                 setBulkSelectedDates(rng);
-                // Keep anchor as the original unless ctrl is also pressed, then move anchor
+                // Optional: move anchor when also using ctrl/meta
                 if (ctrlLike) setBulkAnchorDate(d);
                 return;
               }
 
-              if (ctrlLike) {
-                // Toggle single date
+              // Ctrl/Cmd click toggles on desktop; on mobile (no modifiers), also toggle by default when there is an existing selection
+              if (ctrlLike || bulkSelectedDates.length > 0) {
                 setBulkSelectedDates(prev => {
                   const k = keyOf(d);
                   const has = prev.some(x => keyOf(x) === k);
@@ -689,7 +689,7 @@ export default function Dashboard() {
                 return;
               }
 
-              // Plain click: set single selection and anchor
+              // First tap: set single selection and anchor
               setBulkSelectedDates([d]);
               setBulkAnchorDate(d);
             }}
