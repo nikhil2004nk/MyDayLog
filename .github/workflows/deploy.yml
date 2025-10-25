@@ -31,9 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          # path is relative to the REPO ROOT
-          cache-dependency-path: MyDayLog/package-lock.json
 
       - name: Install
         run: npm ci
@@ -47,7 +44,6 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # because working-directory is MyDayLog, use dist here
           path: dist
 
   deploy:
