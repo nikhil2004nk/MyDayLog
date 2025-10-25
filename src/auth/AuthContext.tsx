@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { AuthResponse, Credentials, User } from './authService';
-import { guest, login, signup } from './authService';
+import { guest, login, signup, getMe, apiLogout, updateProfile as apiUpdateProfile, changePin as apiChangePin, deleteAccount as apiDeleteAccount } from './authService';
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
@@ -12,7 +12,10 @@ type AuthContextValue = {
   login: (c: Credentials) => Promise<void>;
   signup: (c: Credentials) => Promise<void>;
   continueAsGuest: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  updateProfile: (u: { fullName?: string; email?: string }) => Promise<void>;
+  changePin: (currentPin: string, newPin: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -33,7 +36,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
       }
     }
-    setInitializing(false);
+    (async () => {
+      try {
+        const me = await getMe();
+        setUser(me);
+        setToken('cookie');
+      } catch {}
+      setInitializing(false);
+    })();
   }, []);
 
   useEffect(() => {
@@ -53,9 +63,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     token,
     initializing,
     login: async (c: Credentials) => handleAuth(await login(c)),
-    signup: async (c: Credentials) => handleAuth(await signup(c)),
+    signup: async (c: Credentials) => { await signup(c); },
     continueAsGuest: async () => handleAuth(await guest()),
-    logout: () => {
+    logout: async () => {
+      try { await apiLogout(); } catch {}
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+    },
+    updateProfile: async (u) => {
+      const next = await apiUpdateProfile(u);
+      setUser(next);
+    },
+    changePin: async (currentPin, newPin) => {
+      await apiChangePin(currentPin, newPin);
+    },
+    deleteAccount: async () => {
+      await apiDeleteAccount();
       setToken(null);
       setUser(null);
       localStorage.removeItem(TOKEN_KEY);

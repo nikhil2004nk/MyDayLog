@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
+import { FiSun, FiMoon, FiSettings } from 'react-icons/fi';
 import { useTheme } from '../theme/ThemeProvider';
 import { useAuth } from '../auth/AuthContext';
 import Calendar, { dateKey } from '../components/Calendar';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
 import FadeIn from '../components/FadeIn';
+import { getUserSettings, updateUserSettings } from '../settings/userSettingsService';
+import { getMeals, patchMeal, patchMealsBulk } from '../meals/mealsService';
 
 const PROFILE_KEY = 'mydaylog_profile';
 const TIFFIN_KEY = 'mydaylog_tiffin';
@@ -20,7 +23,7 @@ type TiffinDay = {
 };
 
 export default function Dashboard() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateProfile, changePin, deleteAccount } = useAuth();
   const today = useMemo(() => new Date(), []);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -28,16 +31,32 @@ export default function Dashboard() {
   const [viewMonth, setViewMonth] = useState(today.getMonth()); // 0-11
   const [showSettings, setShowSettings] = useState(false);
   const [displayName, setDisplayName] = useState<string>('');
+  const [baseDisplayName, setBaseDisplayName] = useState<string>('');
   const { theme, setTheme, toggleTheme } = useTheme();
+  const [pendingTheme, setPendingTheme] = useState<'light'|'dark'>(theme);
+  const [baseTheme, setBaseTheme] = useState<'light'|'dark'>(theme);
   const [weekStart, setWeekStart] = useState<'mon' | 'sun'>('mon');
+  const [baseWeekStart, setBaseWeekStart] = useState<'mon'|'sun'>('mon');
   const [tiffinMap, setTiffinMap] = useState<Record<string, TiffinDay>>({});
   const [tiffinReminderEnabled, setTiffinReminderEnabled] = useState(false);
+  const [baseRemEnabled, setBaseRemEnabled] = useState<boolean>(false);
   const [tiffinReminderTime, setTiffinReminderTime] = useState<string>('12:30');
+  const [baseRemTime, setBaseRemTime] = useState<string>('12:30');
   const [bulkTiffinMode, setBulkTiffinMode] = useState(false);
   const [bulkMeal, setBulkMeal] = useState<'lunch' | 'dinner' | null>(null);
   const [bulkSelectedDates, setBulkSelectedDates] = useState<Date[]>([]);
   const [bulkAnchorDate, setBulkAnchorDate] = useState<Date | null>(null);
   const [bulkDraft, setBulkDraft] = useState<{ lunch: Record<string, 'received'|'skipped'|'clear'>; dinner: Record<string, 'received'|'skipped'|'clear'> }>({ lunch: {}, dinner: {} });
+  // Account management state
+  const [accFullName, setAccFullName] = useState<string>('');
+  const [accEmail, setAccEmail] = useState<string>('');
+  const [pinCurrent, setPinCurrent] = useState('');
+  const [pinNew, setPinNew] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [changingPin, setChangingPin] = useState(false);
+  const [deletingAcc, setDeletingAcc] = useState(false);
+  const [nowTick, setNowTick] = useState<Date>(new Date());
 
   useEffect(() => {
     // restore view month if present
@@ -51,14 +70,16 @@ export default function Dashboard() {
         }
       }
     } catch {}
-    // restore profile
+    // restore profile (legacy local cache, will be overridden by server if available)
     try {
       const p = localStorage.getItem(PROFILE_KEY);
       if (p) {
-        const parsed = JSON.parse(p) as { displayName?: string; theme?: 'light'|'dark'; weekStart?: 'mon'|'sun' };
+        const parsed = JSON.parse(p) as { displayName?: string; theme?: 'light'|'dark'; weekStart?: 'mon'|'sun'; tiffinReminderEnabled?: boolean; tiffinReminderTime?: string };
         if (parsed.displayName) setDisplayName(parsed.displayName);
         if (parsed.theme === 'dark' || parsed.theme === 'light') setTheme(parsed.theme);
         if (parsed.weekStart === 'mon' || parsed.weekStart === 'sun') setWeekStart(parsed.weekStart);
+        if (typeof parsed.tiffinReminderEnabled === 'boolean') setTiffinReminderEnabled(parsed.tiffinReminderEnabled);
+        if (typeof parsed.tiffinReminderTime === 'string') setTiffinReminderTime(parsed.tiffinReminderTime);
       }
     } catch {}
     // restore tiffin map (migrate old single-entry per day to lunch entry)
@@ -84,16 +105,70 @@ export default function Dashboard() {
     } catch {}
   }, []);
 
+  // Load server user settings when authenticated
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getUserSettings();
+        if (cancelled) return;
+        setDisplayName(s.display_name || '');
+        const themeVal = s.theme === 'dark' ? 'dark' : 'light';
+        setTheme(themeVal);
+        setWeekStart(s.week_start === 'Sun' ? 'sun' : 'mon');
+        const hasTime = !!(s.meal_reminder_time && s.meal_reminder_time.trim());
+        setTiffinReminderEnabled(hasTime && s.meal_reminder_enabled);
+        setTiffinReminderTime(s.meal_reminder_time && s.meal_reminder_time.trim() ? s.meal_reminder_time : '12:30');
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [setTheme]);
+
   useEffect(() => {
     localStorage.setItem('mydaylog_view_month', JSON.stringify({ y: viewYear, m: viewMonth }));
   }, [viewYear, viewMonth]);
-
-  // Theme side-effects handled by ThemeProvider now
 
   useEffect(() => {
     // persist tiffin map
     localStorage.setItem(TIFFIN_KEY, JSON.stringify(tiffinMap));
   }, [tiffinMap]);
+
+  // Load meals for the current view month from backend
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const y = viewYear;
+        const m = String(viewMonth + 1).padStart(2, '0');
+        const from = `${y}-${m}-01`;
+        const lastDay = String(new Date(viewYear, viewMonth + 1, 0).getDate()).padStart(2, '0');
+        const to = `${y}-${m}-${lastDay}`;
+        const data = await getMeals(from, to);
+        if (cancelled) return;
+        setTiffinMap(prev => {
+          const next: Record<string, TiffinDay> = { ...prev };
+          Object.entries(data).forEach(([k, v]) => {
+            const day: TiffinDay = { ...(next[k] || {}) };
+            if (v.lunch?.status) day.lunch = { status: v.lunch.status, reason: v.lunch.reason };
+            else if (day.lunch) delete (day as any).lunch;
+            if (v.dinner?.status) day.dinner = { status: v.dinner.status, reason: v.dinner.reason };
+            else if (day.dinner) delete (day as any).dinner;
+            if (day.lunch || day.dinner) next[k] = day; else delete next[k];
+          });
+          return next;
+        });
+      } catch (e: any) {
+        // ignore load errors silently to keep UI usable
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewYear, viewMonth]);
+
+  // timer tick to evaluate time-based UI (panel visibility)
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(new Date()), 30 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // reminder scheduler (simple in-app reminder)
   useEffect(() => {
@@ -120,8 +195,43 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [tiffinReminderEnabled, tiffinReminderTime, tiffinMap]);
 
+  // Initialize account form fields from backend user
+  useEffect(() => {
+    setAccFullName(user?.fullName || '');
+    setAccEmail(user?.email || '');
+  }, [user]);
+
   const year = viewYear;
   const month = viewMonth;
+  const appName = 'MyDayLog';
+  const friendlyName = (displayName && displayName.trim()) ? displayName.trim() : (user?.email?.split('@')[0] || 'there');
+  const greeting = useMemo(() => {
+    const h = nowTick.getHours();
+    const g = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Good night';
+    return `${g}, ${friendlyName}`;
+  }, [friendlyName, nowTick]);
+
+  const canSaveAccount = useMemo(() => {
+    const curName = user?.fullName || '';
+    const curEmail = user?.email || '';
+    return (accFullName !== curName || accEmail !== curEmail) && !savingAccount;
+  }, [accFullName, accEmail, user, savingAccount]);
+
+  const isFour = (s: string) => /^\d{4}$/.test(s);
+  const canUpdatePin = useMemo(() => {
+    return isFour(pinCurrent) && isFour(pinNew) && isFour(pinConfirm) && pinNew === pinConfirm && !changingPin;
+  }, [pinCurrent, pinNew, pinConfirm, changingPin]);
+
+  const canSaveSettings = useMemo(() => {
+    const effTime = tiffinReminderEnabled ? (tiffinReminderTime || '') : '';
+    const baseEffTime = baseRemEnabled ? (baseRemTime || '') : '';
+    return (
+      displayName !== baseDisplayName ||
+      pendingTheme !== baseTheme ||
+      weekStart !== baseWeekStart ||
+      effTime !== baseEffTime
+    );
+  }, [displayName, pendingTheme, weekStart, tiffinReminderEnabled, tiffinReminderTime, baseDisplayName, baseTheme, baseWeekStart, baseRemEnabled, baseRemTime]);
 
   // Tiffin stats (separate lunch and dinner)
   const monthTiffin = useMemo(() => {
@@ -200,6 +310,17 @@ export default function Dashboard() {
       return next;
     });
     setToastMsg('Meal status updated ');
+    // sync to backend (optimistic)
+    void (async () => {
+      try {
+        const payload: any = { date: k };
+        if (meal === 'lunch') payload.lunch_status = status === 'clear' ? '' : status;
+        else payload.dinner_status = status === 'clear' ? '' : status;
+        await patchMeal(payload);
+      } catch (e: any) {
+        setToastMsg(e?.message || 'Failed to sync meal ');
+      }
+    })();
   };
 
   const setTiffinReason = (k: string, meal: 'lunch' | 'dinner', reason: string) => {
@@ -208,9 +329,17 @@ export default function Dashboard() {
       day[meal] = { ...(day[meal] || {}), reason };
       return { ...prev, [k]: day };
     });
+    // sync reason to backend (optimistic)
+    void (async () => {
+      try {
+        const payload: any = { date: k };
+        if (meal === 'lunch') payload.lunch_reason = reason; else payload.dinner_reason = reason;
+        await patchMeal(payload);
+      } catch (e: any) {
+        setToastMsg(e?.message || 'Failed to sync reason ');
+      }
+    })();
   };
-
-  
 
   const applyBulkTiffin = (meal: 'lunch' | 'dinner', status: 'received' | 'skipped' | 'clear') => {
     if (bulkSelectedDates.length === 0) return;
@@ -227,6 +356,16 @@ export default function Dashboard() {
   const commitBulkDraft = () => {
     const hasDraft = Object.keys(bulkDraft.lunch).length > 0 || Object.keys(bulkDraft.dinner).length > 0;
     if (!hasDraft) return;
+    const items: Array<{ date: string; lunch_status?: ''|'received'|'skipped'; dinner_status?: ''|'received'|'skipped'; }> = [];
+    const pushMeal = (meal: 'lunch'|'dinner', map: Record<string, 'received'|'skipped'|'clear'>) => {
+      Object.entries(map).forEach(([k, st]) => {
+        const existing = items.find(i => i.date === k) || (() => { const it = { date: k } as any; items.push(it); return it; })();
+        const val = st === 'clear' ? '' : st;
+        if (meal === 'lunch') (existing as any).lunch_status = val; else (existing as any).dinner_status = val;
+      });
+    };
+    pushMeal('lunch', bulkDraft.lunch);
+    pushMeal('dinner', bulkDraft.dinner);
     setTiffinMap(prev => {
       const next: Record<string, TiffinDay> = { ...prev };
       const applyMeal = (meal: 'lunch'|'dinner', map: Record<string, 'received'|'skipped'|'clear'>) => {
@@ -246,29 +385,85 @@ export default function Dashboard() {
     });
     setToastMsg('Meal statuses updated ');
     setBulkDraft({ lunch: {}, dinner: {} });
+    // sync bulk to backend (optimistic)
+    void (async () => {
+      try {
+        if (items.length > 0) await patchMealsBulk(items);
+      } catch (e: any) {
+        setToastMsg(e?.message || 'Failed to sync bulk meals ');
+      }
+    })();
   };
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <div className="sticky top-0 z-10 bg-white dark:bg-gray-800 border-b dark:border-gray-700">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="text-sm text-gray-600 dark:text-gray-300">Hey {user?.guest ? 'there' : (user?.identifier?.split('@')[0] || 'there')} 👋</div>
+          <div className="flex flex-col">
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{appName}</div>
+            <div className="text-xs text-gray-600 dark:text-gray-300">{greeting} 👋</div>
+          </div>
           <div className="flex items-center gap-3">
             <button className="text-sm text-gray-600 dark:text-gray-300" onClick={logout}>Logout</button>
             <button
-              className="relative inline-flex h-5 w-9 items-center rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700"
-              onClick={() => { const next = theme === 'dark' ? 'light' : 'dark'; console.log('[theme:toggle] header switch ->', next); toggleTheme(); }}
+              className="relative inline-flex h-6 w-12 items-center rounded-full border border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onClick={() => {
+                const next = theme === 'dark' ? 'light' : 'dark';
+                toggleTheme();
+                void (async () => {
+                  try {
+                    await updateUserSettings({ theme: next });
+                    localStorage.setItem(PROFILE_KEY, JSON.stringify({ displayName, theme: next, weekStart, tiffinReminderEnabled, tiffinReminderTime }));
+                  } catch (e: any) {
+                    setToastMsg(e?.message || 'Failed to update theme ');
+                    setTheme(theme);
+                  }
+                })();
+              }}
               aria-label="Toggle theme"
               title={theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
             >
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-gray-400 dark:bg-gray-300 transition ${theme === 'dark' ? 'translate-x-4' : 'translate-x-1'}`}/>
+              <span className="absolute left-1 text-yellow-500">
+                <FiSun className="w-4 h-4" />
+              </span>
+              <span className="absolute right-1 text-gray-400 dark:text-gray-200">
+                <FiMoon className="w-4 h-4" />
+              </span>
+              <span className={`inline-block h-5 w-5 transform rounded-full bg-white dark:bg-gray-300 transition ${theme === 'dark' ? 'translate-x-6' : 'translate-x-1'}`}/>
             </button>
-            <button className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700" onClick={() => setShowSettings(true)} aria-label="Open settings"/>
+            <button
+              className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+              onClick={() => { setPendingTheme(theme); setShowSettings(true); setBaseDisplayName(displayName); setBaseTheme(theme); setBaseWeekStart(weekStart); setBaseRemEnabled(tiffinReminderEnabled); setBaseRemTime(tiffinReminderTime); }}
+              aria-label="Open settings"
+              title="Settings"
+            >
+              <FiSettings className="w-5 h-5 text-gray-700 dark:text-gray-200" />
+            </button>
           </div>
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6">
+        {(() => {
+          if (!tiffinReminderEnabled || !tiffinReminderTime) return null;
+          const [hh, mm] = tiffinReminderTime.split(':').map(n => parseInt(n || '0', 10));
+          const threshold = new Date(nowTick.getFullYear(), nowTick.getMonth(), nowTick.getDate(), isNaN(hh)?0:hh, isNaN(mm)?0:mm, 0, 0);
+          if (nowTick.getTime() < threshold.getTime()) return null;
+          const k = dateKey(nowTick);
+          const entry = tiffinMap[k];
+          const lunchSet = !!entry?.lunch?.status;
+          const dinnerSet = !!entry?.dinner?.status;
+          if (lunchSet && dinnerSet) return null;
+          let msg = "Today's meals are not yet set";
+          if (lunchSet && !dinnerSet) msg = 'Dinner status is not set yet';
+          if (!lunchSet && dinnerSet) msg = 'Lunch status is not set yet';
+          return (
+            <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-xl p-4">
+              <div className="text-sm font-medium text-amber-800 dark:text-amber-200">Meal Reminder</div>
+              <div className="text-sm text-amber-700 dark:text-amber-300 mt-1">{msg}</div>
+            </div>
+          );
+        })()}
         <div className="mb-4 bg-white dark:bg-gray-800 rounded-xl shadow p-4">
           <div className="flex items-center justify-between mb-4">
             <div className="text-base font-semibold">Meals Stats</div>
@@ -636,11 +831,27 @@ export default function Dashboard() {
           <div className="flex gap-2">
             <button className="px-3 py-1.5 rounded border" onClick={() => setShowSettings(false)}>Close</button>
             <button
-              className="px-3 py-1.5 rounded bg-blue-600 text-white"
+              className="px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-60"
+              disabled={!canSaveSettings}
               onClick={() => {
-                localStorage.setItem(PROFILE_KEY, JSON.stringify({ displayName, theme, weekStart, tiffinReminderEnabled, tiffinReminderTime }));
-                setToastMsg('Settings saved ');
-                setShowSettings(false);
+                // Persist to backend; backend auto-enables by time presence
+                void (async () => {
+                  try {
+                    await updateUserSettings({
+                      display_name: displayName,
+                      theme: pendingTheme,
+                      week_start: weekStart === 'sun' ? 'Sun' : 'Mon',
+                      meal_reminder_time: tiffinReminderEnabled ? (tiffinReminderTime || '') : '',
+                    });
+                    setTheme(pendingTheme);
+                    // cache locally for UX
+                    localStorage.setItem(PROFILE_KEY, JSON.stringify({ displayName, theme: pendingTheme, weekStart, tiffinReminderEnabled, tiffinReminderTime }));
+                    setToastMsg('Settings saved ');
+                    setShowSettings(false);
+                  } catch (e: any) {
+                    setToastMsg(e?.message || 'Failed to save settings ');
+                  }
+                })();
               }}
             >Save</button>
           </div>
@@ -659,8 +870,14 @@ export default function Dashboard() {
           <div>
             <label className="text-sm">Theme</label>
             <div className="mt-1 flex gap-2">
-              <button className={`px-3 py-1.5 rounded border dark:border-gray-700 ${theme==='light'?'bg-gray-100 dark:bg-gray-700':''}`} onClick={() => { console.log('[theme:click] set light'); setTheme('light'); }}>Light</button>
-              <button className={`px-3 py-1.5 rounded border dark:border-gray-700 ${theme==='dark'?'bg-gray-100 dark:bg-gray-700':''}`} onClick={() => { console.log('[theme:click] set dark'); setTheme('dark'); }}>Dark</button>
+              <button
+                className={`px-3 py-1.5 rounded border dark:border-gray-700 ${pendingTheme==='light'?'bg-gray-100 dark:bg-gray-700':''}`}
+                onClick={() => setPendingTheme('light')}
+              >Light</button>
+              <button
+                className={`px-3 py-1.5 rounded border dark:border-gray-700 ${pendingTheme==='dark'?'bg-gray-100 dark:bg-gray-700':''}`}
+                onClick={() => setPendingTheme('dark')}
+              >Dark</button>
             </div>
           </div>
           <div>
@@ -677,6 +894,95 @@ export default function Dashboard() {
               <input type="time" className="border rounded px-2 py-1 dark:border-gray-700 dark:bg-gray-800" value={tiffinReminderTime} onChange={(e) => setTiffinReminderTime(e.target.value)} />
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Shows an in-app reminder if today’s lunch/dinner status isn’t set at the chosen time.</div>
+          </div>
+          <hr className="my-3 border-gray-200 dark:border-gray-700" />
+          <div>
+            <div className="text-sm font-medium mb-2">Account</div>
+            <div className="grid gap-3">
+              <div>
+                <label className="text-sm">Full Name</label>
+                <input
+                  className="mt-1 w-full border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800"
+                  value={accFullName}
+                  onChange={(e) => setAccFullName(e.target.value)}
+                  placeholder="Full name"
+                />
+              </div>
+              <div>
+                <label className="text-sm">Email</label>
+                <input
+                  className="mt-1 w-full border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800"
+                  value={accEmail}
+                  onChange={(e) => setAccEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  type="email"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="px-3 py-1.5 rounded bg-emerald-600 text-white disabled:opacity-60"
+                  disabled={!canSaveAccount}
+                  onClick={async () => {
+                    try {
+                      setSavingAccount(true);
+                      await updateProfile({ fullName: accFullName || undefined, email: accEmail || undefined });
+                      setToastMsg('Account updated ');
+                    } catch (e: any) {
+                      setToastMsg(e?.message || 'Failed to update account');
+                    } finally {
+                      setSavingAccount(false);
+                    }
+                  }}
+                >{savingAccount ? 'Saving...' : 'Save Account'}</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="text-sm font-medium mb-2">Change PIN</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              <input className="border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800" placeholder="Current PIN" inputMode="numeric" maxLength={4} value={pinCurrent} onChange={e => setPinCurrent(e.target.value.replace(/\D/g,'').slice(0,4))} type="password" />
+              <input className="border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800" placeholder="New PIN" inputMode="numeric" maxLength={4} value={pinNew} onChange={e => setPinNew(e.target.value.replace(/\D/g,'').slice(0,4))} type="password" />
+              <input className="border rounded px-3 py-2 dark:border-gray-700 dark:bg-gray-800" placeholder="Confirm PIN" inputMode="numeric" maxLength={4} value={pinConfirm} onChange={e => setPinConfirm(e.target.value.replace(/\D/g,'').slice(0,4))} type="password" />
+            </div>
+            <div className="mt-2">
+              <button
+                className="px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-60"
+                disabled={!canUpdatePin}
+                onClick={async () => {
+                  if (pinNew !== pinConfirm) { setToastMsg('PINs do not match'); return; }
+                  if (!/^\d{4}$/.test(pinCurrent) || !/^\d{4}$/.test(pinNew)) { setToastMsg('PIN must be 4 digits'); return; }
+                  try {
+                    setChangingPin(true);
+                    await changePin(pinCurrent, pinNew);
+                    setPinCurrent(''); setPinNew(''); setPinConfirm('');
+                    setToastMsg('PIN updated ');
+                  } catch (e: any) {
+                    setToastMsg(e?.message || 'Failed to update PIN');
+                  } finally {
+                    setChangingPin(false);
+                  }
+                }}
+              >{changingPin ? 'Updating...' : 'Update PIN'}</button>
+            </div>
+          </div>
+          <div>
+            <div className="text-sm font-medium mb-2 text-rose-600">Danger Zone</div>
+            <button
+              className="px-3 py-1.5 rounded border border-rose-600 text-rose-700 hover:bg-rose-50 dark:border-rose-500 dark:text-rose-300 disabled:opacity-60"
+              disabled={deletingAcc}
+              onClick={async () => {
+                if (!confirm('Are you sure you want to delete your account? This cannot be undone.')) return;
+                try {
+                  setDeletingAcc(true);
+                  await deleteAccount();
+                  setToastMsg('Account deleted ');
+                } catch (e: any) {
+                  setToastMsg(e?.message || 'Failed to delete account');
+                } finally {
+                  setDeletingAcc(false);
+                }
+              }}
+            >{deletingAcc ? 'Deleting...' : 'Delete Account'}</button>
           </div>
         </div>
       </Modal>
