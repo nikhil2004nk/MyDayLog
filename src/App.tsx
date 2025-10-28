@@ -6,7 +6,11 @@ import { useAuth } from './auth/AuthContext'
 function App() {
   const { token, initializing } = useAuth();
 
-  if (initializing) return null;
+  if (initializing) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="text-gray-700 dark:text-gray-200">Loading...</div>
+    </div>
+  );
 
   return (
     <Routes>
