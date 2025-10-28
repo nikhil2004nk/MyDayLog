@@ -4,6 +4,7 @@ import { guest, login, signup, getMe, apiLogout, updateProfile as apiUpdateProfi
 
 const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
+const HAD_SESSION_KEY = 'had_session';
 
 type AuthContextValue = {
   user: User | null;
@@ -28,6 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const t = localStorage.getItem(TOKEN_KEY);
     const u = localStorage.getItem(USER_KEY);
+    const hadSession = localStorage.getItem(HAD_SESSION_KEY) === '1';
     if (t && u) {
       setToken(t);
       try {
@@ -37,6 +39,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     (async () => {
+      // Avoid unauthenticated calls on first load (prevents 401 noise on prod)
+      if (!t || !hadSession) {
+        setInitializing(false);
+        return;
+      }
       try {
         const me = await getMe();
         setUser(me);
@@ -56,6 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const handleAuth = (res: AuthResponse) => {
     setToken(res.token);
     setUser(res.user);
+    try { localStorage.setItem(HAD_SESSION_KEY, '1'); } catch {}
   };
 
   const value = useMemo<AuthContextValue>(() => ({
@@ -71,6 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(HAD_SESSION_KEY);
     },
     updateProfile: async (u) => {
       const next = await apiUpdateProfile(u);
@@ -85,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(HAD_SESSION_KEY);
     },
   }), [user, token, initializing]);
 
